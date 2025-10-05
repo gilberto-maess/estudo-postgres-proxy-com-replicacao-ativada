@@ -1,0 +1,61 @@
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: etcd
+    command: >
+      /usr/local/bin/etcd
+      --name etcd0
+      --data-dir /etcd-data
+      --advertise-client-urls http://etcd:2379
+      --listen-client-urls http://0.0.0.0:2379
+    ports:
+      - "2379:2379"
+
+  pg1:
+    image: postgres:16
+    container_name: pg1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: appdb
+    volumes:
+      - pg1_data:/var/lib/postgresql/data
+      - ./init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
+
+  pg2:
+    image: postgres:16
+    container_name: pg2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: appdb
+    restart: always
+    volumes:
+      - pg2_data:/var/lib/postgresql/data
+      - ./init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
+
+  pg3:
+    image: postgres:16
+    container_name: pg3
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: appdb
+    restart: always
+    volumes:
+      - pg3_data:/var/lib/postgresql/data
+      - ./init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
+
+  haproxy:
+    image: haproxy:2.9
+    container_name: haproxy
+    ports:
+      - "6432:6432"
+      - "8404:8404"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+volumes:
+  pg1_data:
+  pg2_data:
+  pg3_data:
