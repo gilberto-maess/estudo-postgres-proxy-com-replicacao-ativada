@@ -142,6 +142,172 @@ flowchart LR
 
 ---
 
+## 🧭 Aplicação
+
+> Os scripts abaixo foram aplicados no WSL2 usando a distro Ubuntu.
+
+### Docker Compose:
+
+```yml
+services:
+
+  pg1:
+    image: postgres:16
+    container_name: pg1
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: appdb
+    volumes:
+      - pg1_data:/var/lib/postgresql/data
+      - ./init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
+
+  pg2:
+    image: postgres:16
+    container_name: pg2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: appdb
+    restart: always
+    volumes:
+      - pg2_data:/var/lib/postgresql/data
+      - ./init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
+
+  pg3:
+    image: postgres:16
+    container_name: pg3
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: senha123
+      POSTGRES_DB: appdb
+    restart: always
+    volumes:
+      - pg3_data:/var/lib/postgresql/data
+      - ./init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
+
+  haproxy:
+    image: haproxy:2.9
+    container_name: haproxy
+    ports:
+      - "6432:6432"
+      - "8404:8404"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+volumes:
+  pg1_data:
+  pg2_data:
+  pg3_data:
+```
+
+### haproxy.cfg
+
+```cfg
+global
+    maxconn 200
+
+defaults
+    log global
+    mode tcp
+    timeout connect 10s
+    timeout client 1m
+    timeout server 1m
+
+frontend postgresql
+    bind *:6432
+    default_backend pg_cluster
+
+backend pg_cluster
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    server pg1 pg1:5432 check
+    server pg2 pg2:5432 check backup
+    server pg3 pg3:5432 check backup
+
+listen stats
+    bind *:8404
+    mode http
+    stats enable
+    stats uri /
+    stats refresh 5s
+```
+
+### init-primary.sh
+
+```bash
+#!/bin/bash
+set -e
+echo "Configuring primary (pg1)..."
+
+cat >> /var/lib/postgresql/data/postgresql.conf <<EOF
+wal_level = replica
+max_wal_senders = 10
+wal_keep_size = 64
+listen_addresses = '*'
+EOF
+
+cat >> /var/lib/postgresql/data/pg_hba.conf <<EOF
+host replication replicator all md5
+host all all all md5
+EOF
+
+psql -U postgres -c "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'replica123';"
+echo "Primary setup complete."
+```
+
+### init-replica.sh
+
+```bash
+#!/bin/bash
+set -e
+echo "Configuring replica..."
+sleep 10
+rm -rf /var/lib/postgresql/data/*
+
+PGPASSWORD=replica123 pg_basebackup -h pg1 -D /var/lib/postgresql/data -U replicator -Fp -Xs -P -R
+
+echo "Replica setup complete."
+
+```
+
+### Levantando o ambiente:
+
+```sh
+docker compose up
+```
+
+### Testando o proxy:
+
+```sh
+
+# Atenção: Execute linha a linha. Não execute todo o script abaixo de uma só vez.
+
+# 1) Instalação do client do postgres
+sudo apt install postgresql-client-common postgresql-client
+psql --version
+
+# 2) Teste de proxy + replicação
+# Conectando no server (senha -> senha123)
+psql -h localhost -p 6432 -U postgres -d appdb
+# Note aque estamos nos conectando no host do HAproxy.
+# Se você se conectou, significa que o proxy está funcionando.
+
+# Criação de tabela + inserção de dado pra teste
+CREATE TABLE teste (id serial PRIMARY KEY, nome text);
+INSERT INTO teste (nome) VALUES ('Replica funcionando!');
+# Toda operação de escrita é realizada no nó master, ou seja, pg1
+
+# 3) Testando a replicação
+docker exec -it pg2 psql -U postgres -d appdb -c "SELECT * FROM teste;" # teste no primeiro nó de replicação, o pg2
+docker exec -it pg3 psql -U postgres -d appdb -c "SELECT * FROM teste;" # teste no segundo nó de replicação, o pg3
+
+# Se você conseguiu consultar a tabela "teste" com uma linha com o valor "Replica funcionando!" em cada um dos nós de replicação, então a replicação está funcionando.
+```
+
+---
+
 ✅ Conclusão
 
 Com o Keycloak 26+, a alta disponibilidade torna-se mais simples e robusta, já que:
